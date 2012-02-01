@@ -238,9 +238,30 @@ static const char *skipString (const char *cp)
 /* Skip everything up to an identifier start. */
 static const char *skipEverything (const char *cp)
 {
+	int match;
 	for (; *cp; cp++)
 	{
+		match = 0;
 		if (*cp == '"' || *cp == '\'' || *cp == '#')
+			match = 1;
+
+		/* these checks find unicode, binary (Python 3) and raw strings */
+		if (!match && (
+			!strncasecmp(cp, "u'", 2) || !strncasecmp(cp, "u\"", 2) ||
+			!strncasecmp(cp, "r'", 2) || !strncasecmp(cp, "r\"", 2) ||
+			!strncasecmp(cp, "b'", 2) || !strncasecmp(cp, "b\"", 2)))
+		{
+			match = 1;
+			cp += 1;
+		}
+		if (!match && (
+			!strncasecmp(cp, "ur'", 3) || !strncasecmp(cp, "ur\"", 3) ||
+			!strncasecmp(cp, "br'", 3) || !strncasecmp(cp, "br\"", 3)))
+		{
+			match = 1;
+			cp += 2;
+		}
+		if (match)
 		{
 			cp = skipString(cp);
 			if (!*cp) break;
@@ -455,9 +476,9 @@ static void checkParent(NestingLevels *nls, int indent, vString *parent)
 	{
 		n = nls->levels + i;
 		/* is there a better way to compare two vStrings? */
-		if (strcmp(vStringValue(parent), vStringValue(n->name)) == 0)
+		if (n && strcmp(vStringValue(parent), vStringValue(n->name)) == 0)
 		{
-			if (n && indent <= n->indentation)
+			if (indent <= n->indentation)
 			{
 				/* remove this level by clearing its name */
 				vStringClear(n->name);
@@ -501,6 +522,8 @@ static char const *find_triple_start(char const *string, char const **which)
 
 	for (; *cp; cp++)
 	{
+		if (*cp == '#')
+			break;
 		if (*cp == '"' || *cp == '\'')
 		{
 			if (strncmp(cp, doubletriple, 3) == 0)
@@ -610,6 +633,49 @@ static const char *skipTypeDecl (const char *cp, boolean *is_class)
 	return NULL;
 }
 
+/* checks if there is a lambda at position of cp, and return its argument list
+ * if so.
+ * We don't return the lambda name since it is useless for now since we already
+ * know it when we call this function, and it would be a little slower. */
+static boolean varIsLambda (const char *cp, char **arglist)
+{
+	boolean is_lambda = FALSE;
+
+	cp = skipSpace (cp);
+	cp = skipIdentifier (cp); /* skip the lambda's name */
+	cp = skipSpace (cp);
+	if (*cp == '=')
+	{
+		cp++;
+		cp = skipSpace (cp);
+		if (strncmp (cp, "lambda", 6) == 0)
+		{
+			const char *tmp;
+
+			cp += 6; /* skip the lambda */
+			tmp = skipSpace (cp);
+			/* check if there is a space after lambda to detect assignations
+			 * starting with 'lambdaXXX' */
+			if (tmp != cp)
+			{
+				vString *args = vStringNew ();
+
+				cp = tmp;
+				vStringPut (args, '(');
+				for (; *cp != 0 && *cp != ':'; cp++)
+					vStringPut (args, *cp);
+				vStringPut (args, ')');
+				vStringTerminate (args);
+				if (arglist)
+					*arglist = strdup (vStringValue (args));
+				vStringDelete (args);
+				is_lambda = TRUE;
+			}
+		}
+	}
+	return is_lambda;
+}
+
 static void findPythonTags (void)
 {
 	vString *const continuation = vStringNew ();
@@ -654,14 +720,14 @@ static void findPythonTags (void)
 		indent = cp - line;
 		line_skip = 0;
 
-		checkParent(nesting_levels, indent, parent);
-
 		/* Deal with multiline string ending. */
 		if (longStringLiteral)
 		{
 			find_triple_end(cp, &longStringLiteral);
 			continue;
 		}
+		
+		checkParent(nesting_levels, indent, parent);
 
 		/* Deal with multiline string start. */
 		longstring = find_triple_start(cp, &longStringLiteral);
@@ -732,6 +798,7 @@ static void findPythonTags (void)
 		if (variable)
 		{
 			const char *start = variable;
+			char *arglist;
 			boolean parent_is_class;
 
 			vStringClear (name);
@@ -743,11 +810,22 @@ static void findPythonTags (void)
 			vStringTerminate (name);
 
 			parent_is_class = constructParentString(nesting_levels, indent, parent);
-			/* skip variables in methods */
-			if (! parent_is_class && vStringLength(parent) > 0)
-				continue;
 
-			makeVariableTag (name, parent);
+			if (varIsLambda (variable, &arglist))
+			{
+				/* show class members or top-level script lambdas only */
+				if (parent_is_class || vStringLength(parent) == 0)
+					makeFunctionTag (name, parent, parent_is_class, arglist);
+				eFree (arglist);
+			}
+			else
+			{
+				/* skip variables in methods */
+				if (! parent_is_class && vStringLength(parent) > 0)
+					continue;
+ 
+				makeVariableTag (name, parent);
+			}
 		}
 		/* Find and parse imports */
 		parseImports(line);
