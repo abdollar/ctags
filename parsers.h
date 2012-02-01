@@ -30,16 +30,17 @@
 	DosBatchParser, \
 	EiffelParser, \
 	ErlangParser, \
+	FalconParser, \
 	FlexParser, \
 	FortranParser, \
+	GoParser, \
 	HtmlParser, \
 	JavaParser, \
 	JavaScriptParser, \
 	LispParser, \
 	LuaParser, \
 	MakefileParser, \
-	ObjCParser, \
-	ObjCppParser, \
+	ObjcParser, \
 	OcamlParser, \
 	PascalParser, \
 	PerlParser, \
